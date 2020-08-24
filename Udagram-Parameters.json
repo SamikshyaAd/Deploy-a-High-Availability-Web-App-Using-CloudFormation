@@ -1,0 +1,22 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "Udagram"
+
+    },
+    {
+        "ParameterKey": "AMIID",
+        "ParameterValue": "ami-0ba8629bff503c084"
+
+    },
+    {
+        "ParameterKey": "InstanceType",
+        "ParameterValue": "t3.medium"
+
+    },
+    {
+        "ParameterKey": "DiskSpace",
+        "ParameterValue": "10"
+
+    }
+]

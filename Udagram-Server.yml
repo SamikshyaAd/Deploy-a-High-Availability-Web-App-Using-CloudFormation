@@ -1,0 +1,181 @@
+Description: >
+    Udagram servers- Launch configuration, Autoscaling group, IAM Roles, Security groups, Application load balancer, Target groups.
+Parameters: 
+    EnvironmentName:
+        Description: An environment name that will be prefixed to resource names
+        Type: String
+    AMIID:
+       Description: Instance image ID
+       Type: String
+       Default: ami-0ba8629bff503c084 
+    DiskSpace: 
+        Description: Please enter disk space for machine
+        Type: String
+        Default: 10
+    InstanceType:
+       Description: Instance type
+       Type: String
+       Default: t3.medium
+          
+Resources:
+    LoadBalancerSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Allow http to my load balancer
+            SecurityGroupIngress:
+              - IpProtocol: tcp
+                FromPort: 80
+                ToPort: 80
+                CidrIp: 0.0.0.0/0
+            SecurityGroupEgress:
+              - IpProtocol: tcp
+                FromPort: 80
+                ToPort: 80
+                CidrIp: 0.0.0.0/0
+            Tags: 
+               - Key: name
+                 Value: !Sub "${EnvironmentName} LBSec"
+            VpcId:
+                Fn::ImportValue:
+                   !Sub "${EnvironmentName}-VPCID"
+    WebServerSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties: 
+            GroupDescription: Allow http to my servers and SSH from local
+            SecurityGroupIngress: 
+               - IpProtocol: tcp
+                 FromPort: 80
+                 ToPort: 80
+                 CidrIp: 0.0.0.0/0
+            SecurityGroupEgress: 
+                - IpProtocol: tcp
+                  FromPort: 0
+                  ToPort: 65535
+                  CidrIp: 0.0.0.0/0
+            Tags: 
+               - Key: name
+                 Value: !Sub "${EnvironmentName} WebSec"
+            VpcId: 
+                Fn::ImportValue:
+                  !Sub "${EnvironmentName}-VPCID"
+    UdacityS3ReadOnlyEC2:
+        Type: AWS::IAM::Role
+        Properties: 
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: "Allow"
+                    Principal: 
+                      Service: 
+                          - "ec2.amazonaws.com"
+                    Action: 
+                      - "sts:AssumeRole"
+            Path: "/"
+    RolePolicies: 
+        Type: "AWS::IAM::Policy"
+        Properties: 
+            PolicyName: "S3ReadAccess"
+            PolicyDocument: 
+                Version: "2012-10-17"
+                Statement: 
+                  - Effect: "Allow"
+                    Action: 
+                      - "s3:*"
+                    Resource: "*"
+            Roles: 
+              - Ref: "UdacityS3ReadOnlyEC2"
+    InstanceProfile:
+        Type: AWS::IAM::InstanceProfile
+        Properties: 
+            Roles:
+              - Ref: "UdacityS3ReadOnlyEC2"
+    LaunchConfiguration:
+        Type: AWS::AutoScaling::LaunchConfiguration
+        Properties: 
+            IamInstanceProfile: !Ref InstanceProfile 
+            ImageId: !Ref AMIID 
+            InstanceType: !Ref InstanceType 
+            BlockDeviceMappings:
+            - DeviceName: "/dev/sdk"
+              Ebs:
+                VolumeSize: !Ref DiskSpace
+            SecurityGroups: 
+            - Ref: WebServerSecurityGroup 
+            UserData:
+                Fn::Base64: !Sub | 
+                    #!/bin/bash
+                    # install apache server and read html file from s3 bucket
+                    sudo apt-get update -y
+                    sudo apt-get install unzip awscli -y
+                    sudo apt-get install apache2 -y
+                    sudo systemctl start apache2.service
+                    cd /var/www/html
+                    sudo aws s3 cp s3://udacity-demo-1/udacity.zip .
+                    sudo unzip -o udacity.zip
+    WebAutoScalingGroup:
+        Type: AWS::AutoScaling::AutoScalingGroup
+        Properties:
+            VPCZoneIdentifier:
+            - Fn::ImportValue: 
+                !Sub "${EnvironmentName}-PRIVATE-SUBNETS"
+            LaunchConfigurationName:
+              Ref: LaunchConfiguration
+            MinSize: '4'
+            MaxSize: '4'
+            TargetGroupARNs:
+            - Ref: WebAppTargetGroup
+    LoadBalancer:
+        Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+        Properties:
+            SecurityGroups:
+            - Ref: LoadBalancerSecurityGroup 
+            Subnets:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PUBLIC-SUBNET1
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PUBLIC-SUBNET2
+    LoadBalancerListener:
+        Type: AWS::ElasticLoadBalancingV2::Listener
+        Properties:
+            DefaultActions:
+            - Type: forward
+              TargetGroupArn:
+                Ref: WebAppTargetGroup
+            LoadBalancerArn:
+                Ref: LoadBalancer
+            Port: '80'
+            Protocol: HTTP
+    LoadBalancerListenerRule:
+        Type: AWS::ElasticLoadBalancingV2::ListenerRule
+        Properties:
+            Actions:
+            - Type: forward
+              TargetGroupArn:
+                Ref: WebAppTargetGroup 
+            Conditions:
+            - Field: path-pattern
+              Values: [/]
+            ListenerArn: !Ref 'LoadBalancerListener'
+            Priority: 1
+    WebAppTargetGroup:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties:
+            HealthCheckIntervalSeconds: 10
+            HealthCheckPath: /
+            HealthCheckProtocol: HTTP
+            HealthCheckTimeoutSeconds: 8
+            HealthyThresholdCount: 2
+            Port: 80
+            Protocol: HTTP
+            UnhealthyThresholdCount: 5
+            VpcId: 
+              Fn::ImportValue:
+                !Sub "${EnvironmentName}-VPCID"
+Outputs:
+    LoadBalancerDNS:
+        Description: Load Balancer DNS name
+        Value: 
+          Fn::Join: [ "", [ "http://", !GetAtt LoadBalancer.DNSName ] ]
+        Export:
+            Name: !Sub ${EnvironmentName}-LB-DNS
+            
+        
+            
